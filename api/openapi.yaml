@@ -1,0 +1,355 @@
+openapi: 3.1.0
+info:
+  title: Retail Recommendation Service
+  version: 1.2.0
+  description: |
+    Low-latency API for retrieving personalized product recommendations for the B2C mobile retail app.
+    Supports single-user sync requests, multi-user batch requests, and long-running async recommendation jobs.
+servers:
+  - url: https://api.retail.org/v1
+    description: Production API Gateway
+paths:
+  /recommend:
+    post:
+      summary: Retrieve recommendations for a single user (Sync)
+      description: Fetches real-time personalized product recommendations for a specific user using their 30-day browsing and purchase behavior.
+      parameters:
+        - name: X-Correlation-ID
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Unique request ID used to trace the request across microservices.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendationRequest'
+      responses:
+        '200':
+          description: Recommendations successfully generated.
+          headers:
+            X-Correlation-ID:
+              schema:
+                type: string
+                format: uuid
+              description: Replayed correlation ID.
+            X-Model-Version:
+              schema:
+                type: string
+              description: The exact version of the model that served this prediction (e.g., v1.2.0).
+            X-Variant-ID:
+              schema:
+                type: string
+              description: The A/B test variant ID assigned to this user (e.g., control, treatment-a).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /recommend/batch:
+    post:
+      summary: Retrieve recommendations for multiple users (Batch)
+      description: Evaluates and returns recommendation lists for up to 50 users in a single request.
+      parameters:
+        - name: X-Correlation-ID
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - requests
+              properties:
+                requests:
+                  type: array
+                  maxItems: 50
+                  items:
+                    $ref: '#/components/schemas/RecommendationRequest'
+      responses:
+        '200':
+          description: Batch recommendations completed.
+          headers:
+            X-Correlation-ID:
+              schema:
+                type: string
+                format: uuid
+            X-Model-Version:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - results
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RecommendationResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /recommend/async:
+    post:
+      summary: Trigger a batch recommendation job (Async)
+      description: Starts a background job to generate offline recommendations for a large segment of users (e.g. for marketing emails).
+      parameters:
+        - name: X-Correlation-ID
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_segment
+                - limit
+              properties:
+                user_segment:
+                  type: string
+                  example: "all_active_users"
+                limit:
+                  type: integer
+                  minimum: 5
+                  maximum: 50
+                  default: 10
+      responses:
+        '202':
+          description: Job accepted. Returns job metadata and a status-polling endpoint.
+          headers:
+            X-Correlation-ID:
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncJobStatus'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /recommend/jobs/{job_id}:
+    get:
+      summary: Get status of an async recommendation job
+      description: Returns the status and, if finished, the result location for a background recommendation job.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current job status retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncJobStatus'
+        '404':
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns service status, model loading status, and feature store connectivity status.
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - model_loaded
+                  - feature_store_connected
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  model_loaded:
+                    type: boolean
+                    example: true
+                  feature_store_connected:
+                    type: boolean
+                    example: true
+        '503':
+          description: Service is unhealthy (e.g. model weights failed to load or DB is down).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "unhealthy"
+                  error:
+                    type: string
+                    example: "Feature store connection failed."
+
+components:
+  schemas:
+    RecommendationRequest:
+      type: object
+      required:
+        - user_id
+      properties:
+        user_id:
+          type: string
+          example: "usr_98234710"
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 10
+          example: 5
+        context:
+          type: object
+          properties:
+            device:
+              type: string
+              example: "mobile_ios"
+            location:
+              type: string
+              example: "US-NY"
+
+    RecommendationResponse:
+      type: object
+      required:
+        - user_id
+        - recommendations
+        - fallback_served
+      properties:
+        user_id:
+          type: string
+          example: "usr_98234710"
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationItem'
+        fallback_served:
+          type: boolean
+          description: True if the model failed or if the user is a cold start, and we served popular items instead.
+          example: false
+
+    RecommendationItem:
+      type: object
+      required:
+        - product_id
+        - score
+      properties:
+        product_id:
+          type: string
+          example: "prod_8829"
+        score:
+          type: number
+          format: float
+          description: Relevance probability score assigned by the LightGBM Ranker.
+          example: 0.982
+
+    AsyncJobStatus:
+      type: object
+      required:
+        - job_id
+        - status
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "7e59b207-6bdf-419b-a010-85f02bc0f1bf"
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+          example: "RUNNING"
+        progress_percentage:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 45
+        result_url:
+          type: string
+          format: uri
+          description: S3 or GCS location of the output parquet file containing recommendations (only populated when status is COMPLETED).
+          example: "s3://retail-ml-exports/recs-jobs/7e59b207-6bdf-419b-a010-85f02bc0f1bf.parquet"
+        error_message:
+          type: string
+          description: Populated if status is FAILED.
+          example: "Memory limit exceeded during ranking."
+
+    ErrorResponse:
+      type: object
+      required:
+        - error_code
+        - message
+        - timestamp
+      properties:
+        error_code:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "user_id is a required field."
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-06-11T09:30:10.123Z"
+
+  responses:
+    400BadRequest:
+      description: Invalid request payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    429TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+            example:
+              error_code: "RATE_LIMIT_EXCEEDED"
+              message: "API rate limit of 1000 requests/minute exceeded for this client IP."
+              timestamp: "2026-06-11T09:30:00Z"
+    500InternalServerError:
+      description: Server error during recommendation computation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+            example:
+              error_code: "INTERNAL_SERVER_ERROR"
+              message: "Model prediction timed out."
+              timestamp: "2026-06-11T09:30:00Z"

@@ -1,0 +1,77 @@
+# Prometheus Alerting Rules Specification
+# This file defines alerts for system latency, errors, and model consistency.
+
+groups:
+  - name: retail-recs-alerts
+    rules:
+      # 1. Latency SLO Alert
+      - alert: RecommendationHighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{path="/recommend"}[5m])) by (le)) > 0.120
+        for: 2m
+        labels:
+          severity: critical
+          tier: serving
+        annotations:
+          summary: "p95 recommendation latency exceeds 120ms budget"
+          description: "The p95 response latency for /recommend over the last 5 minutes is {{ $value }}s, exceeding the 120ms target. This directly degrades user experience."
+
+      # 2. Error Rate SLO Alert
+      - alert: RecommendationHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{path="/recommend", status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{path="/recommend"}[5m])) > 0.001
+        for: 1m
+        labels:
+          severity: critical
+          tier: serving
+        annotations:
+          summary: "Recommendation error rate is above 0.1%"
+          description: "Recommendation API error rate is {{ $value | humanizePercentage }}, which violates the 99.9% availability SLO."
+
+      # 3. Model Version Mismatch Alert
+      # Triggered if the active model container returns a model version that doesn't match the routing config version.
+      - alert: ModelVersionMismatch
+        expr: |
+          sum(rate(http_requests_total{path="/recommend", x_model_version_header="mismatch"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          tier: routing
+        annotations:
+          summary: "Model version mismatch detected in API responses"
+          description: "Active containers are serving model versions that do not match the routed A/B variants in the API Gateway header. Check active deployments."
+
+      # 4. Multi-Window Multi-Burn-Rate Alerts (Availability Error Budget)
+      # 1-Hour Burn Rate: Critical alert if we are burning budget so fast we'll exhaust it in ~72 hours (burn rate > 14.4)
+      - alert: ErrorBudgetBurnRate1h
+        expr: |
+          (
+            sum(rate(http_requests_total{path="/recommend", status=~"5.."}[1h]))
+            /
+            sum(rate(http_requests_total{path="/recommend"}[1h]))
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          tier: serving
+        annotations:
+          summary: "Critical error budget burn rate (1h window)"
+          description: "The 1-hour error budget burn rate is currently {{ $value | humanizePercentage }}, indicating a severe outage that will exhaust the availability budget quickly."
+
+      # 6-Hour Burn Rate: Warning alert if we are burning budget steadily (burn rate > 6.0)
+      - alert: ErrorBudgetBurnRate6h
+        expr: |
+          (
+            sum(rate(http_requests_total{path="/recommend", status=~"5.."}[6h]))
+            /
+            sum(rate(http_requests_total{path="/recommend"}[6h]))
+          ) > (6.0 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          tier: serving
+        annotations:
+          summary: "Warning error budget burn rate (6h window)"
+          description: "The 6-hour error budget burn rate is {{ $value | humanizePercentage }}, indicating sustained instability that threatens the monthly SLO."

@@ -1,0 +1,142 @@
+name: Deploy Model Serving Service
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # Stage 1: Code Quality & Testing
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest httpx fastapi uvicorn
+
+      - name: Lint Code
+        run: ruff check app/
+
+      - name: Run Unit & API Tests
+        run: pytest tests/
+
+  # Stage 2: Security Scans
+  security-scan:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Bandit (Python SAST)
+        run: |
+          pip install bandit
+          bandit -r app/ -x tests/
+
+      - name: Build Local Image for Scanning
+        run: |
+          docker build -t retail-recs-service:scan -f container/Dockerfile .
+
+      - name: Run Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'retail-recs-service:scan'
+          format: 'table'
+          exit-code: '1' # Fail build if HIGH or CRITICAL issues are found
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+
+  # Stage 3: Build & Registry Push
+  build-and-push:
+    needs: security-scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to AWS ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: container/Dockerfile
+          push: true
+          tags: |
+            123456789012.dkr.ecr.us-east-1.amazonaws.com/retail-recs-service:${{ github.sha }}
+            123456789012.dkr.ecr.us-east-1.amazonaws.com/retail-recs-service:latest
+
+  # Stage 4: Deploy to Staging Environment
+  deploy-to-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update Staging Kubernetes Deployments
+        run: |
+          aws eks update-kubeconfig --name staging-cluster --region us-east-1
+          kubectl set image deployment/retail-recs-serving \
+            serving-container=123456789012.dkr.ecr.us-east-1.amazonaws.com/retail-recs-service:${{ github.sha }}
+
+      - name: Verify Staging Rollout & Smoke Test
+        run: |
+          kubectl rollout status deployment/retail-recs-serving --timeout=3m
+          # Run a basic health-check query
+          STAGING_URL="http://staging-recs.retail.org/health"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" $STAGING_URL)
+          if [ "$STATUS" -ne 200 ]; then
+            echo "Staging health check failed with status $STATUS"
+            exit 1
+          fi
+
+  # Stage 5: Deploy to Production (Gated by Github Environment Approval)
+  deploy-to-production:
+    needs: deploy-to-staging
+    runs-on: ubuntu-latest
+    environment:
+      name: production # This environment has a manual approval protection rule in GitHub
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update Production Kubernetes Deployments
+        run: |
+          aws eks update-kubeconfig --name production-cluster --region us-east-1
+          kubectl set image deployment/retail-recs-serving \
+            serving-container=123456789012.dkr.ecr.us-east-1.amazonaws.com/retail-recs-service:${{ github.sha }}
+
+      - name: Verify Production Rollout
+        run: |
+          kubectl rollout status deployment/retail-recs-serving --timeout=5m

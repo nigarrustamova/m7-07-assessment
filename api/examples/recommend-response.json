@@ -1,0 +1,26 @@
+{
+  "user_id": "usr_98234710",
+  "recommendations": [
+    {
+      "product_id": "prod_8829",
+      "score": 0.982
+    },
+    {
+      "product_id": "prod_4721",
+      "score": 0.891
+    },
+    {
+      "product_id": "prod_1034",
+      "score": 0.765
+    },
+    {
+      "product_id": "prod_5592",
+      "score": 0.612
+    },
+    {
+      "product_id": "prod_3011",
+      "score": 0.548
+    }
+  ],
+  "fallback_served": false
+}

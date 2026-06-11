@@ -1,0 +1,5 @@
+{
+  "error_code": "INTERNAL_SERVER_ERROR",
+  "message": "Model prediction timed out (latency budget of 120ms exceeded).",
+  "timestamp": "2026-06-11T09:30:00.000Z"
+}

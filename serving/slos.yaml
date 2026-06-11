@@ -1,0 +1,30 @@
+# Service Level Objectives (SLOs) and Service Level Indicators (SLIs)
+# This file defines the reliability targets for the retail-recs-service.
+
+service_name: "retail-recs-service"
+measurement_window: "30d"
+
+objectives:
+  - name: "recommend-latency"
+    description: "The percentage of HTTP POST /recommend requests that are served faster than our latency budget."
+    indicator:
+      sli_type: "latency"
+      metric_source: "prometheus"
+      query: |
+        sum(rate(http_request_duration_seconds_bucket{path="/recommend", le="0.12"}[5m]))
+        /
+        sum(rate(http_request_duration_seconds_count{path="/recommend"}[5m]))
+    target: 0.950 # 95% of requests must be served in <= 120ms (0.12 seconds)
+    error_budget: 0.050 # 5% of requests are allowed to exceed 120ms
+
+  - name: "recommend-availability"
+    description: "The percentage of HTTP POST /recommend requests that do not return a server-side error (5xx)."
+    indicator:
+      sli_type: "availability"
+      metric_source: "prometheus"
+      query: |
+        sum(rate(http_requests_total{path="/recommend", status!~"5.."}[5m]))
+        /
+        sum(rate(http_requests_total{path="/recommend"}[5m]))
+    target: 0.999 # 99.9% of requests must be successful (non-5xx)
+    error_budget: 0.001 # 0.1% of requests are allowed to fail

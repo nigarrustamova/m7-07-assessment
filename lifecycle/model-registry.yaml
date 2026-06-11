@@ -1,0 +1,74 @@
+# Model Registry Metadata Schema Specification
+# This file defines the metadata structure required for registering a model.
+# Every registered model version must populate these fields before triggering validation gates.
+
+model_name: "retail-recs-ranker"
+version: "1.2.0"
+
+# Registration Details
+registration:
+  timestamp: "2026-06-11T09:30:00Z"
+  registered_by: "pipeline-runner@retail-recs.local"
+  lifecycle_status: "candidate" # Allowed: [draft, candidate, staging, production, archived]
+
+# Lineage and Reproducibility (Critical for Auditability)
+lineage:
+  git_repository: "https://github.com/retail-org/retail-recs-service"
+  git_commit: "a1b2c3d4e5f67890abcdef1234567890abcdef12"
+  training_job_id: "job-20260611-0800"
+  training_dataset:
+    dataset_uri: "s3://retail-ml-lakehouse/datasets/train_v20260611.parquet"
+    dataset_hash: "sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  feature_store:
+    provider: "Feast"
+    feature_views:
+      - "user_browsing_30d:v1"
+      - "user_purchase_30d:v1"
+      - "product_features:v1"
+
+# Artifacts Location
+artifacts:
+  model_format: "LightGBM"
+  model_weights_uri: "s3://retail-ml-models/retail-recs-ranker/v1.2.0/model.bst"
+  schema_definition_uri: "s3://retail-ml-models/retail-recs-ranker/v1.2.0/schema.yaml"
+  feature_signature:
+    inputs:
+      - name: "user_id"
+        type: "string"
+      - name: "user_last_30d_clicks"
+        type: "int32"
+      - name: "user_last_30d_purchases"
+        type: "int32"
+      - name: "product_category_preference"
+        type: "string"
+      - name: "product_id"
+        type: "string"
+    outputs:
+      - name: "recommendation_score"
+        type: "float32"
+
+# Offline Validation Metrics (Calculated during training)
+offline_metrics:
+  roc_auc: 0.785
+  mean_reciprocal_rank: 0.412
+  precision_at_k:
+    k: 5
+    value: 0.234
+  recall_at_k:
+    k: 10
+    value: 0.458
+
+# Automated Quality Gate Checklist
+quality_gates:
+  offline_performance_passed: true   # ROC-AUC > 0.75
+  latency_check_passed: true         # p95 latency under 25ms in container tests
+  security_scan_passed: true         # Trivy container scan report is green
+
+# Sign-Off & Approvals for Promotion
+approvals:
+  staging:
+    approved_by: "lead-mle@retail-recs.local"
+    approved_timestamp: "2026-06-11T10:15:00Z"
+  production:
+    approved_by: "product-owner@retail-recs.local"
+    approved_timestamp: "" # Pending A/B shadow results
